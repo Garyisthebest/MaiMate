@@ -10,6 +10,7 @@ import uuid
 
 from confirmation import ConfirmationLedger, digest
 from dining_memory import DiningMemory, alias_definition, alias_target, canonical, menu_matches, normalized, redact
+from dining_insights import DiningInsights, dining_clock
 from mcd_adapter import AdapterError
 from quick_order import money_cents
 
@@ -37,6 +38,11 @@ def amount(value):
 
 def positive(value, fallback=1):
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else fallback
+
+
+def read_requested(text):
+    """A model interpretation never overrides a refusal/hypothetical query."""
+    return not re.search(r'不要|不用|不需要|不想|别|禁止|停止|如果|假如|比如|能不能|可以吗|能.{0,5}吗|怎么|如何|[“”「」]', text)
 
 
 def build_item(detail, quantity=1, overrides=None):
@@ -128,6 +134,8 @@ class OrderSession:
         self.history = []
         self.transcript = []
         self.preferences = {}
+        self.order_habits = []
+        self.situation = ''
         self.search_pending = None
         self.search_city = None
         self.failed_read = None
@@ -155,6 +163,8 @@ class OrderSession:
         targets = menu_matches(self.request.get('preference', ''), meals, self.preferences.get('aliases'))
         menu = sorted(meals.items(), key=lambda item: str(item[0]) not in targets)
         return {'phase': self.phase, 'request': self.request, 'store': self.store,
+                'clock': dining_clock(), 'current_situation': self.situation,
+                'order_habits': self.order_habits,
                 'pending_store_search': self.search_pending, 'search_city': self.search_city,
                 'stores': [{'index': i, 'name': s.get('storeName')} for i, s in enumerate(self.stores, 1)],
                 'menu': [{'code': str(code), 'name': m.get('name'), 'reference_price_yuan': m.get('currentPrice')}
@@ -171,6 +181,7 @@ class OrderingAgent:
         self.app, self.model, self.location = app, model, location
         self.ledger = ledger or ConfirmationLedger()
         self.memory = memory or DiningMemory(self.ledger.path.parent / 'dining-memory.sqlite3')
+        self.insights = DiningInsights(self.ledger.path.parent / 'dining-insights.sqlite3', app)
         self.sessions = {}
         self.lock = threading.RLock()
         self.location_link = None
@@ -198,6 +209,7 @@ class OrderingAgent:
                 self.sessions[actor] = state
             state = self.sessions[actor]
             state.preferences = self.memory.summary(actor)
+            state.order_habits = self.insights.model_summary(actor, state.preferences.get('enabled'))
             state.touched = time.time()
             return state
 
@@ -311,7 +323,7 @@ class OrderingAgent:
                 if text in ('为什么推荐', '为什么推荐这个', '为什么懂我'):
                     lines = [c['name'] + '：' + '；'.join(c.get('reasons', ['来自当前门店菜单'])) for c in s.candidates]
                     return self.view(s, '\n'.join(lines) if lines else '选店后，我会结合当前菜单、你这次的需求和已保存口味说明推荐理由。可以先发“我的偏好”。')
-                if text in ('嗨', '你好呀', '早上好', '晚上好', '中午好', '在吗', '谢谢', '谢谢你'):
+                if text in ('嗨', '你好呀', '早上好', '晚上好', '中午好', '在吗', '谢谢', '谢谢你') and not self.model.status()['configured']:
                     return self.view(s, '在呢。今天想稳稳吃点喜欢的，还是换个口味？' if '谢' not in text else '好呀，吃得合口味就好。吃完也可以告诉我这餐怎么样。', ['按老样子推荐', '换换口味', '我的偏好'])
                 if text in ('账号说明', '账户说明', '我的账号', '我的账户', '登录状态') or re.search(r'(?:需要|怎么|是否|有没有|要不要).{0,6}登[录陆]|(?:获取|查看|查到).{0,6}账号信息', text):
                     return self.view(s, self._account_explanation())
@@ -319,12 +331,22 @@ class OrderingAgent:
                     return self._account(s, 'points')
                 if text in ('我的优惠券', '我的券', '查优惠券', '我的卡包'):
                     return self._account(s, 'coupons')
+                if re.search(r'历史订单|订单汇总|消费分析|常点什么|吃过什么|点过什么', text):
+                    if re.fullmatch(r'(?:删除|清除|清空)(?:我的)?(?:历史订单(?:分析|汇总)?|订单汇总|消费分析)', text):
+                        self.insights.clear(actor)
+                        s.order_habits = []
+                        return self.view(s, '已删除这个入口的历史订单分析和推断；明确喜好与昵称可在口味手记单独管理。')
+                    if not read_requested(text):
+                        return self.view(s, '历史仅在你主动要求时导入，不会自动扫描。发“分析历史订单”才查询近期完成订单并保存可删除的汇总。')
+                    return self._history(s)
+                if re.search(r'(?:餐厅|门店|这家店|店里).{0,12}(?:空不空|挤不挤|忙不忙|人多|排队|客流|状态|营业|开门|关门)|(?:查|看看).{0,6}(?:餐厅|门店)状态', text):
+                    return self._restaurant(s)
                 # Only a current, direct user confirmation reaches mutation. Never the model.
                 if text in ('确认下单', '确认创建订单'):
                     return self._confirm(s, s.pending['id'] if s.pending else None)
                 if text in ('订单状态', '查订单', '取餐码', '付款链接', '支付链接', '付好了吗'):
                     return self._status(s)
-                if text == '你好':
+                if text == '你好' and not self.model.status()['configured']:
                     return self.view(s, '我是麦合拍 MaiMate。今天吃点什么？你也可以先跟我聊聊，慢慢挑。', ['按老样子推荐', '我的偏好'])
                 if text in ('帮助', 'help', '开始', '麦合拍MaiMate', '麦合拍', 'MaiMate'):
                     return self.view(s, HELP, ['我到店了，推荐套餐', '定位', '订单状态'])
@@ -342,14 +364,12 @@ class OrderingAgent:
                     return self.view(s, '这条昵称还没有保存。请先选店，再用“昵称就是菜单中的完整餐品名”教我；记忆需开启，目标也必须能在当前菜单核实。', ['查看菜单'])
                 if learned and not re.search(r'今天|这次|本次|帮我|来一|点一|想吃|给我|推荐|我要|要吃', text):
                     return self.view(s, '记住了：' + '、'.join(learned) + '。以后推荐会参考这些偏好；你这次的要求优先。可发“我的偏好”查看。')
-                if s.unknown:
-                    return self.view(s, '存在提交结果未知的订单，已阻止继续下单。请在麦当劳官方客户端核查；刷新页面或重启不会解除锁定。')
-                if s.order and text != '重新点餐':
+                if (s.order or s.unknown) and text != '重新点餐':
                     if self.model.status()['configured']:
                         intent = self.model.interpret(text, s.context())
-                        if intent['action'] == 'chat':
+                        if intent['action'] in ('chat', 'account', 'history', 'restaurant', 'preferences', 'help', 'status'):
                             return self._intent(s, intent, text)
-                    return self.view(s, '这一单已经创建。可以发“订单状态”查进度；如要另点一单，请明确发送“重新点餐”。', ['订单状态'])
+                    return self.view(s, '上一笔提交结果未知，请先在官方客户端核查；账户查询和聊天仍可使用。' if s.unknown else '这一单已经创建。可以发“订单状态”查进度；另点一单请说“重新点餐”。', ['订单状态', '历史订单', '我的积分'])
                 if text in ('算了', '不要了', '取消', '取消选餐', '清空餐单'):
                     s.pending = None
                     s.detail = s.item = s.quote = None
@@ -385,10 +405,11 @@ class OrderingAgent:
                     return self._quote(s)
                 if text in ('按老样子', '按老样子推荐', '你了解我，帮我选', '来点新鲜的', '换换口味'):
                     if text.startswith('按') or text.startswith('你了解'):
-                        if not s.preferences.get('enabled') or not (s.preferences.get('likes') or s.preferences.get('often_selected') or s.preferences.get('insights')):
+                        if not s.preferences.get('enabled') or not (s.preferences.get('likes') or s.preferences.get('often_selected') or s.preferences.get('insights') or s.order_habits):
                             return self.view(s, '还没有足够的口味依据。你更想吃牛肉、鸡肉，还是先看看菜单？也可以说“记住，我喜欢……”让我以后参考。')
                     s.pending = None
                     s.request['explore'] = text in ('来点新鲜的', '换换口味')
+                    s.request['delegate'] = text.startswith('按') or text.startswith('你了解')
                     # These phrases replace the previous main-meal request,
                     # while keeping drink/preparation needs for this order.
                     previous = self._preference(s)
@@ -417,6 +438,11 @@ class OrderingAgent:
                     s.pending = None
                     s.request.pop('budget_cents', None)
                     return self._recommend(s) if s.store else self.view(s, '已取消本单预算限制。先选门店即可继续。')
+                if re.search(r'帮我选|帮我挑|替我选|你来定|你决定|看着办|按老样子|搭一份|安排一份', text) and not re.search(r'不要|别帮|不让|如果|假如|比如|朋友|同事|[?？]', text):
+                    s.request['delegate'] = True
+                elif re.search(r'推荐|看看|列出|自己选|我来选', text):
+                    s.request['delegate'] = False
+                s.situation = redact(text, 240)
                 # Resolve a named main meal before model indices or an old cart.
                 # Option changes/questions stay in the normal interpretation path.
                 if s.store and s.catalog and not re.search(r'不要|不想吃|不吃|不喜欢|不是|为什么|区别|喜[欢好]|爱吃|搭配|如果|假如|比如|朋友|同事', text):
@@ -475,15 +501,22 @@ class OrderingAgent:
         if text in commands:
             operation = commands[text]
             self.memory.control(s.actor, operation)
+            if operation == 'clear':
+                self.insights.clear(s.actor)
             s.preferences = self.memory.summary(s.actor)
+            s.order_habits = self.insights.model_summary(s.actor, s.preferences.get('enabled'))
             s.history = []
-            return {'clear': '已清除你的饮食偏好、选择统计和餐后反馈。',
+            return {'clear': '已清除你的饮食偏好、选择统计、餐后反馈和历史订单分析。',
                     'disable': '已关闭偏好学习和使用。需要时发“开启记忆”；已有偏好可用“清除偏好”删除。',
                     'enable': '已开启本地偏好记忆。只保存饮食标签与选择统计，你这次的要求始终优先。'}[operation]
         match = re.fullmatch(r'(?:忘记|忘掉|删除偏好)[：:\s]*(.{1,80})', text)
         if match:
             removed = self.memory.forget(s.actor, match[1])
+            before = self.insights.summary(s.actor)['foods']
+            self.insights.forget(s.actor, match[1])
+            removed += [v['name'] for v in before if v not in self.insights.summary(s.actor)['foods']]
             s.preferences = self.memory.summary(s.actor)
+            s.order_habits = self.insights.model_summary(s.actor, s.preferences.get('enabled'))
             s.history = []
             return '已忘记：' + '、'.join(removed) + '。' if removed else '没有找到这项偏好。可发“我的偏好”查看，或“清除偏好”全部删除。'
         if text in ('口味复盘', '我最近的口味', '你越来越懂我了吗'):
@@ -507,6 +540,8 @@ class OrderingAgent:
                 lines.append('多次选择（不代表已付款）：' + '、'.join(v['name'] + f"（{v['selections']}次）" for v in memory['often_selected']))
             if memory['insights']:
                 lines.append('餐后反馈：' + '、'.join(v['name'] + '（' + {'positive': '好评', 'negative': '少推荐', 'mixed': '待了解'}[v['signal']] + '）' for v in memory['insights']))
+            if s.order_habits:
+                lines.append('近期完成订单推断（弱信号，可忘记）：' + '、'.join(v['name'] + f"（{v['orders']}单）" for v in s.order_habits))
             lines += ['你教过的昵称：' + ('、'.join(k + '＝' + v for k, v in memory['aliases'].items()) or '尚未记录'),
                       '可发“记住，我喜欢无糖饮料”“忘记无糖”“清除偏好”“关闭记忆”。']
             return '\n'.join(lines)
@@ -528,7 +563,33 @@ class OrderingAgent:
                 '查询和下单使用当前麦当劳 MCP Token 所授权的账号；微信扫码只负责收发消息，不会自动切换麦当劳账号。\n'
                 '有效 Token 通常不需要在这里再登录；若官方收银台要求登录或验证，按页面完成即可。换麦当劳账号需在官方平台重新授权并更新本项目 Token。\n'
                 '当前接口可查询积分、优惠券及获授权的订单信息，没有发现用于读取完整个人资料、手机号或会员等级的专用接口。\n'
-                '发“我的积分”或“我的优惠券”可按需查询；不会自动扫描历史订单来建立偏好。')
+                '发“我的积分”“我的优惠券”按需查询；发“分析历史订单”会导入一批近期完成订单的本地摘要，可随时删除。')
+
+    def _history(self, s):
+        data = self.insights.refresh(s.actor)
+        s.order_habits = self.insights.model_summary(s.actor, s.preferences.get('enabled'))
+        lines = [f"本次解析 {data['examined']} 条，纳入近90天已完成订单 {data['orders']} 单，合计 {amount(data['total_cents'])}。"]
+        if data['foods']:
+            lines.append('常点餐品：' + '、'.join(f"{v['name']}（{v['orders']}单）" for v in data['foods'][:5]))
+        if data['periods']:
+            lines.append('出现较多的时段：' + '、'.join(f"{v['period']} {v['orders']}单" for v in data['periods']))
+        lines += [data['notice'], '重复出现的餐品会作为可纠正的弱偏好参与推荐；你明确说的和本次需求优先。发“清除历史订单分析”可删除。']
+        result = self.view(s, '\n'.join(lines), ['按老样子推荐', '我的偏好'])
+        result['_private_reply'] = True
+        return result
+
+    def _restaurant(self, s):
+        if not s.store:
+            return self.view(s, '你想看哪家店？告诉我城市和门店名。官方没有实时客流或空座数据，能核验营业状态和营业时间。')
+        if not s.search_city:
+            return self.view(s, '还缺这家店的城市，暂不能刷新营业信息。官方没有实时客流、空座或排队人数。')
+        data = self.app.query('query-nearby-stores', {'searchType': 2, 'beType': 1, 'city': s.search_city, 'keyword': s.store['storeName']})
+        store = next((v for v in data if isinstance(v, dict) and v.get('storeCode') == s.store['storeCode']), None) if isinstance(data, list) else None
+        if not store:
+            return self.view(s, '本次未重新查到这家店，营业情况待核实。没有实时客流、空座或排队数据。')
+        status = '营业中' if store.get('businessStatus') is True else '暂停营业' if store.get('businessStatus') is False else '官方未返回'
+        hours = '—'.join(str(store[k]) for k in ('businessStartTime', 'businessEndTime') if store.get(k)) or '官方未返回'
+        return self.view(s, f"{store.get('storeName', '')}\n本次查询：{status}\n营业时间：{hours}\n实时客流、空座与排队人数：官方未提供，不能据营业状态判断空不空。", ['历史订单', '我的积分'])
 
     def _account(self, s, kind):
         # Read account assets only after a direct request. Neither these data nor
@@ -669,6 +730,20 @@ class OrderingAgent:
         return intent
 
     def _intent(self, s, intent, text):
+        # Read-only side tasks can run in every phase without touching the cart.
+        if intent['action'] == 'history':
+            if read_requested(text) and re.search(r'历史订单|订单汇总|消费分析|常点什么|吃过什么|点过什么', text):
+                return self._history(s)
+            return self.view(s, '发“分析历史订单”可导入近期完成订单摘要；也可以先查看本地管理后台。')
+        if intent['action'] == 'restaurant':
+            return self._restaurant(s)
+        if intent['action'] == 'preferences':
+            return self.view(s, self._memory_command(s, '我的偏好'))
+        if intent['action'] == 'account':
+            kind = intent.get('account_kind')
+            if read_requested(text) and kind in ('points', 'coupons') and re.search(r'查|看|多少|余额|剩|还有|我的|我有|积分|优惠券|卡包', text) and re.search('积分' if kind == 'points' else r'优惠券|我的券|卡包', text):
+                return self._account(s, kind)
+            return self.view(s, self._account_explanation())
         if intent['action'] == 'chat':
             reply = intent.get('question') or '我在，今天想聊聊口味，还是一起挑一餐？'
             if re.search(r'https?://|¥|\d+\s*元|(?:随时|保证|肯定|一定|绝对).{0,8}(?:有售|能点|能买|安排|有货)|(?:已|正在|马上|我帮你|我帮您).{0,14}(?:下单|付款|支付|扣款|查询|查好|保存|记住|联系)|取餐码|订单号|token|api.?key', reply, re.I):
@@ -691,14 +766,6 @@ class OrderingAgent:
         if intent.get('takeway'):
             s.request['takeway'] = intent['takeway']
         action = intent['action']
-        if action == 'account':
-            query_words = r'查|看|多少|余额|剩|还有|我的|我有'
-            asset = '积分' if intent.get('account_kind') == 'points' else r'优惠券|我的券|卡包'
-            if intent.get('account_kind') in ('points', 'coupons') and re.search(query_words, text) and re.search(asset, text):
-                return self._account(s, intent['account_kind'])
-            return self.view(s, self._account_explanation())
-        if action == 'preferences':
-            return self.view(s, self._memory_command(s, '我的偏好'))
         if action == 'menu':
             return self._menu(s)
         if action == 'status':
@@ -759,11 +826,15 @@ class OrderingAgent:
         s.search_city = city.strip()
         s.store = s.catalog = s.detail = s.item = s.quote = None
         s.options = s.components = s.candidates = []
-        s.stores = [{k: v for k, v in store.items() if k in ('storeCode', 'storeName', 'address', 'businessStatus', 'distance', 'businessHours')}
+        s.stores = [{k: v for k, v in store.items() if k in ('storeCode', 'storeName', 'address', 'businessStatus', 'distance', 'businessHours', 'businessStartTime', 'businessEndTime')}
                     for store in data if isinstance(store, dict) and store.get('storeCode') and store.get('businessStatus') is not False][:8]
         s.phase = 'stores'
         if not s.stores:
             return self.view(s, '这个位置暂时没有查到可用门店。换一个门店名或附近地标试试。')
+        # Only an exact full name supplied by the user skips store selection.
+        exact = [v for v in s.stores if normalized(v.get('storeName', '')) == normalized(keyword)]
+        if len(exact) == 1 and not label:
+            return self._store(s, exact[0]['storeCode'])
         prefix = f'定位到{label}。' if label else ''
         lines = [prefix + '请选择你正在的门店，避免下错店：']
         lines.extend(f"{i}. {store.get('storeName', '')}\n{store.get('address', '')}" for i, store in enumerate(s.stores, 1))
@@ -786,6 +857,9 @@ class OrderingAgent:
         s.catalog = {'meals': data['meals'], 'categories': data.get('categories', [])}
         s.detail = s.item = s.quote = s.takeway = None
         s.options = s.components = []
+        matches = menu_matches(s.request.get('preference', ''), s.catalog['meals'], s.preferences.get('aliases'))
+        if len(matches) == 1 and re.search(r'我要|来一|点一|给我|要吃', s.request.get('preference', '')) and not re.search(r'[?？]|推荐|看看|有没有', s.request.get('preference', '')):
+            return self._meal(s, matches[0])
         return self._recommend(s)
 
     def _recommend(self, s, codes=None):
@@ -847,6 +921,11 @@ class OrderingAgent:
                 if not re.search(r'套餐|堡|卷|饭|小食|组合|拼盘|1\s*\+\s*1|随心配', name):
                     continue
             score = (40 if '套餐' in name else 0) + (15 if '堡' in name else 0)
+            # Rank explicit taste as a separate priority so accumulated weak
+            # history/feedback/model votes cannot outvote what the user said.
+            taste_priority = int(not s.request.get('explore') and any(normalized(v) in normalized(name) for v in memory.get('likes', [])))
+            if any(normalized(v) in normalized(name) and normalized(v) not in normalized(s.request.get('preference', '')) for v in memory.get('dislikes', [])):
+                taste_priority = -1
             reasons = ['来自当前门店可售菜单']
             if s.request.get('budget_cents'):
                 reasons.append('菜单价在本次预算内，最终以官方算价为准')
@@ -868,19 +947,29 @@ class OrderingAgent:
                 if normalized(feedback['name']) == normalized(name):
                     score += feedback['score']
                     reasons.append('参考最近餐后反馈（' + str(feedback['samples']) + '次）')
+            for habit in s.order_habits:
+                if normalized(habit['name']) == normalized(name):
+                    score += min(18, habit['orders'] * 3)
+                    reasons.append('近期完成订单出现' + str(habit['orders']) + '次（偏好推断，可纠正）')
             familiar = [v['name'] for v in memory.get('often_selected', [])] + memory.get('likes', [])
             if memory.get('last_selection'):
                 familiar.append(memory['last_selection']['name'])
+            familiar += [v['name'] for v in s.order_habits]
             if s.request.get('explore') and any(normalized(v) in normalized(name) for v in familiar):
                 score -= 100
                 reasons.append('这次想换口味，熟悉餐品往后放一点')
             pool.append({'code': str(code), 'name': name, 'reference_cents': cents,
-                         'quantity': s.request['count'], 'score': score, 'reasons': reasons})
-        pool.sort(key=lambda v: (-v['score'], v['reference_cents'], v['code']))
-        s.candidates = [{k: v for k, v in p.items() if k != 'score'} for p in pool[:3]]
+                         'quantity': s.request['count'], 'score': score, 'taste_priority': taste_priority, 'reasons': reasons})
+        pool.sort(key=lambda v: (-v['taste_priority'], -v['score'], v['reference_cents'], v['code']))
+        s.candidates = [{k: v for k, v in p.items() if k not in ('score', 'taste_priority')} for p in pool[:3]]
         s.phase = 'recommendations'
         if not s.candidates:
             return self.view(s, '这家店的当前菜单里没找到符合需求的候选。可以改口味、取消预算限制或换店。')
+        if s.request.get('delegate') and len(named_codes) <= 1:
+            chosen = s.candidates[0]
+            result = self._meal(s, chosen['code'])
+            result['reply'] = '先帮你搭这份：' + chosen['name'] + '。' + '；'.join(chosen['reasons']) + '。\n' + result['reply']
+            return result
         lines = [s.store.get('storeName', '') + '，给你这几个选择：']
         if named_codes:
             lines.append('以下只列与你本次餐品名称匹配的商品；有多个时请明确选一个。')

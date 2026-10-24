@@ -1,0 +1,14 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#c82028"><title>饭搭子管理台 · 麦合拍 MaiMate</title><link rel="stylesheet" href="/dashboard.css"><script src="/dashboard.js" defer></script></head><body>
+<aside class="rail"><a class="brand" href="/"><span class="logo">合</span><b>麦合拍<small>MaiMate</small></b></a><nav aria-label="后台导航"><a href="/" aria-current="page">饭搭子管理台</a><a href="/memory">口味手记</a><a href="/weixin">微信与最近对话</a><a href="/settings">连接设置</a><a href="/chat">调试对话</a></nav><p>在微信里吃饭，<br>在这里了解偏好。</p><span class="rail-plate" aria-hidden="true">合</span></aside>
+<main><header><div><h1>吃得合拍，有迹可循。</h1><p>点餐交给微信，管理台帮你照看口味与连接。</p></div><label>查看入口<select id="source"><option value="weixin">已绑定的微信</option><option value="web">当前网页会话</option></select></label></header>
+<div class="connection-strip" aria-label="运行状态"><span id="mcp">麦当劳：读取中</span><span id="model">模型：读取中</span><span id="weixin">微信：读取中</span><a href="/settings">管理连接</a></div>
+<p id="notice" role="status" aria-live="polite"></p>
+<div class="desk"><section class="analysis" aria-labelledby="historyTitle"><div class="section-title"><div><h2 id="historyTitle">你的麦当劳食谱</h2><p id="historyNotice">导入近期完成订单，看看常点什么。</p></div><button id="importHistory">导入并分析近期订单</button></div>
+<p class="note">仅解析官方本次返回的最近30条以内、近90天已完成订单。此操作会保存汇总，不保存订单号、门店、地址和原始账单。</p>
+<div class="totals"><div><span id="orders">—</span><small>纳入的完成订单</small></div><div><span id="spend">—</span><small>这些订单的实付合计</small></div><div><span id="period">—</span><small>这些订单较常出现的时段</small></div></div>
+<div class="history-body"><section><h3>月份小结</h3><div id="months" class="months"><p class="empty">导入后显示按月的订单金额。</p></div></section><section><h3>常点清单</h3><ol id="foods" class="foods"><li class="empty">还没有历史订单分析。常点是线索，未必全是你爱吃的。</li></ol></section></div>
+<div class="history-footer"><span id="importedAt">尚未导入</span><button id="clearHistory" class="quiet">删除历史分析</button></div>
+</section><aside class="companion"><section><span class="taste-stamp" aria-hidden="true">合口味</span><h2>它为什么这样推荐</h2><p>本次要求优先，明确喜好其次，历史与反馈作参考。</p><div id="evidence" class="evidence"></div><a href="/memory">查看、纠正或关闭记忆</a></section><section class="wx-guide"><h2>让它替你多走几步</h2><p class="utterance">“今天赶时间，想吃牛肉，你帮我挑一份，打包，饮料无糖。”</p><p>它会结合当次需求、时间与口味查真实菜单，搭好后给出预览。你看过门店和金额，再确认下单。</p><p class="utterance">“分析一下历史订单。”<br>“这家店现在营业吗？人多吗？”</p><p>营业状态可以查；实时空座与排队人数，官方暂未提供。</p><a href="/weixin">打开微信管理</a></section></aside></div>
+<section class="account-bar"><div><h2>积分，也别忘了看</h2><p>只在你点击时查询；积分明细不保存、不发给模型。</p></div><button id="points" class="outline">查询当前账号积分</button><pre id="pointReply" hidden></pre></section>
+<footer>后台仅限本机访问。微信回复需要本机进程在线；电脑休眠时无法接收。两个入口分别保存记忆，使用同一麦当劳 MCP 授权账号。</footer>
+</main></body></html>

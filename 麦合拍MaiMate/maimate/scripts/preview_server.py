@@ -24,6 +24,7 @@ from model_gateway import ModelGateway
 from location_service import LocationResolver
 from location_relay import LocationRelay
 from ordering_agent import OrderingAgent
+from dining_insights import dining_clock
 
 WEB = ROOT / "web"
 
@@ -68,6 +69,23 @@ class PreviewApp:
         if not isinstance(payload, dict) or payload.get("success") is False or payload.get("code", 200) not in (0, 200):
             raise AdapterError("business_error", "门店暂未返回可用数据，请稍后重试或更换搜索位置")
         return payload.get("data")
+
+    def insight_actor(self, source, web_actor):
+        if source == 'web':
+            return web_actor
+        if source == 'weixin' and self.weixin and self.weixin.owner_actor():
+            return self.weixin.owner_actor()
+        raise AdapterError('invalid_source', '请先绑定微信，或选择当前网页会话')
+
+    def dashboard(self, actor):
+        s = self.agent.session(actor)
+        with s.lock:
+            return {'history': self.agent.insights.summary(actor), 'memory': self.agent.memory.summary(actor),
+                    'phase': s.phase, 'clock': dining_clock(),
+                    'model': self.model.status(), 'mcp_connected': self.connected,
+                    'weixin': self.weixin.status() if self.weixin else {'state': 'unavailable'},
+                    'restaurant': {'name': s.store.get('storeName'), 'business_status': s.store.get('businessStatus'),
+                                   'realtime_crowding': None} if s.store else None}
 
     def handle(self, path, body):
         if path == "/api/settings/model":
@@ -200,6 +218,13 @@ def handler_for(app, allowed_hosts):
                     return self.send(200, {'memory': app.agent.memory.summary(self.actor())})
                 except AdapterError as exc:
                     return self.send(400, {'error': str(exc)})
+            if path == '/api/dashboard':
+                try:
+                    from urllib.parse import parse_qs
+                    source = parse_qs(urlsplit(self.path).query).get('source', ['web'])[0]
+                    return self.send(200, app.dashboard(app.insight_actor(source, self.actor())))
+                except AdapterError as exc:
+                    return self.send(400, {'error': str(exc)})
             if path == "/api/settings":
                 return self.send(200, {"model": app.model.status(), "location": app.relay.status()})
             if path == "/api/weixin/status":
@@ -212,7 +237,9 @@ def handler_for(app, allowed_hosts):
             files = {'/memory': ('memory.html', 'text/html; charset=utf-8'), '/memory.js': ('memory.js', 'text/javascript; charset=utf-8'),
                      "/weixin": ("weixin.html", "text/html; charset=utf-8"), "/weixin.js": ("weixin.js", "text/javascript; charset=utf-8"),
                      "/settings": ("settings.html", "text/html; charset=utf-8"), "/settings.js": ("settings.js", "text/javascript; charset=utf-8"),
-                     "/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+                     "/": ("dashboard.html", "text/html; charset=utf-8"), "/chat": ("index.html", "text/html; charset=utf-8"),
+                     "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"), "/dashboard.css": ("dashboard.css", "text/css; charset=utf-8"),
+                     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
                      "/style.css": ("style.css", "text/css; charset=utf-8"), "/agent.css": ("agent.css", "text/css; charset=utf-8")}
             if path not in files:
                 return self.send(404, {"error": "未找到页面"})
@@ -224,7 +251,7 @@ def handler_for(app, allowed_hosts):
             if not self.allowed() or origin not in {f"http://{host}" for host in allowed_hosts} or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 return self.send(403, {"error": "请求来源不受支持，请从本地预览页操作"})
             path = urlsplit(self.path).path
-            if path not in {"/api/agent/chat", '/api/agent/memory', "/api/settings/model", "/api/settings/model/test", "/api/location/start", "/api/location/stop",
+            if path not in {"/api/agent/chat", '/api/agent/memory', '/api/insights', "/api/settings/model", "/api/settings/model/test", "/api/location/start", "/api/location/stop",
                             "/api/stores", "/api/menu", "/api/detail", "/api/quick-parse", "/api/recommend", "/api/weixin/login", "/api/weixin/verify", "/api/weixin/resume", "/api/weixin/pause", "/api/weixin/forget", "/api/weixin/memory"}:
                 return self.send(404, {"error": "未提供此操作"})
             try:
@@ -236,6 +263,22 @@ def handler_for(app, allowed_hosts):
                     raise ValueError
                 if path == "/api/agent/chat":
                     return self.send(200, app.agent.chat(self.actor(), body.get("text", ""), action=body.get("action"), payload=body.get("payload")))
+                if path == '/api/insights':
+                    actor = app.insight_actor(body.get('source', 'web'), self.actor())
+                    operation = body.get('operation')
+                    # GET never contacts account tools. Only this deliberate POST
+                    # imports a bounded batch, or reads points without storing them.
+                    state = app.agent.session(actor)
+                    with state.lock:
+                        if operation == 'refresh':
+                            app.agent.insights.refresh(actor)
+                        elif operation == 'clear':
+                            app.agent.insights.clear(actor)
+                        elif operation == 'points':
+                            return self.send(200, {'reply': app.agent._account(state, 'points')['reply']})
+                        else:
+                            raise AdapterError('invalid_input', '请选择导入历史、删除分析或查询积分')
+                    return self.send(200, app.dashboard(actor))
                 if path == '/api/agent/memory':
                     actor = self.actor()
                     commands = {'clear': '清除偏好', 'enable': '开启记忆', 'disable': '关闭记忆'}
@@ -261,6 +304,7 @@ def handler_for(app, allowed_hosts):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument('--resume-weixin', action='store_true', help='恢复本机已有的微信绑定；不自动开启定位隧道')
     opts = parser.parse_args()
     with McdAdapter(AdapterConfig.from_env()) as adapter:
         app = PreviewApp(adapter)
@@ -272,6 +316,11 @@ def main():
         app.weixin = WeixinBridge(app)
         hosts = {f"127.0.0.1:{opts.port}", f"localhost:{opts.port}"}
         server = ThreadingHTTPServer(("127.0.0.1", opts.port), handler_for(app, hosts))
+        if opts.resume_weixin and app.weixin.status().get('bound'):
+            try:
+                app.weixin.start_worker()
+            except WeixinError:
+                print('微信未能恢复，请在本机管理台重新连接。', flush=True)
         print(f"麦合拍MaiMate已启动：http://127.0.0.1:{opts.port} · 官方MCP已连接 · {app.count}工具 · 点餐智能体", flush=True)
         try:
             server.serve_forever()
