@@ -38,3 +38,6 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+
+# Local migration alias for existing Conda prefixes; never publish.
+/麦聚桌_skill

@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#C82028"><title>口味手记 · 麦合拍 MaiMate</title><link rel="stylesheet" href="/agent.css"><script src="/memory.js" defer></script></head>
+<body><header class="app-header"><a class="brand" href="/"><span class="brand-icon">合</span><span>麦合拍<small>MaiMate · 你的饭搭子</small></span></a><nav><a href="/">回去聊天</a><a href="/weixin">微信</a><a href="/settings">设置</a></nav></header>
+<main class="settings-page taste-notebook"><div class="notebook-heading"><div><h1 class="page-title">合口味，有迹可循。</h1><p class="page-intro">你说过的、选过的、吃完觉得的，分开记，也都能改。</p></div><span class="notebook-stamp" aria-hidden="true">合拍<br>手记</span></div>
+<label class="memory-source">查看谁的手记<select id="memorySource"><option value="web">当前网页会话</option><option value="weixin">已绑定的微信</option></select></label><p class="settings-note">两个入口的记忆各自保存；选择入口只查看相应记录，不合并身份。</p>
+<p id="memoryStatus" class="memory-summary" role="status">正在翻开手记…</p>
+<section class="notebook-section"><h2>你亲口说过</h2><p class="settings-note">明确喜好优先。本次想换口味时，听你这次的。</p><div id="explicitMemories"></div></section>
+<section class="notebook-section"><h2>最近吃得合不合拍</h2><p class="settings-note">来自你主动给的评价，最近90天参考。同一餐可改评价，旧评价逐渐减弱。</p><div id="feedbackMemories"></div></section>
+<section class="notebook-section"><h2>还在慢慢了解</h2><div id="choiceMemories"></div><p class="settings-note">多次选择只是倾向，不表示付款，也不会自动升级为“你一定喜欢”。</p></section>
+<section class="notebook-section"><h2>你怎么叫，我怎么懂</h2><div id="aliasMemories"></div><p class="settings-note">别名仍需匹配门店真实菜单，不保证固定价格。</p></section>
+<div class="settings-buttons"><button id="toggleMemory" class="secondary-button">关闭记忆</button><button id="clearMemory" class="quiet-button">清除全部手记</button><button id="refreshMemory" class="quiet-button">刷新</button></div><p id="memoryNotice" class="settings-status" role="status"></p>
+<p class="settings-note">只保存在本项目。没有保存完整聊天、精确位置或账户资产。模型会参考必要的口味摘要来聊天和选餐；关闭记忆后停止学习和使用。<br>在聊天中说“记住，我喜欢无糖饮料”“评价上一餐”“口味复盘”，就能继续了解彼此。</p>
+</main></body></html>

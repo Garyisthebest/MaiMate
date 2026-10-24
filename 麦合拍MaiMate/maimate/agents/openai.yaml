@@ -1,0 +1,6 @@
+interface:
+  display_name: "麦合拍 MaiMate · 你的饭搭子"
+  short_description: "记住口味与餐后反馈，用麦当劳官方MCP选餐算价，明确确认后下单并交接官方付款"
+  default_prompt: "使用 $maimate 参考我的口味和最近反馈，帮我在当前门店选餐、解释推荐理由，展示官方应付金额，等我确认后再下单。"
+policy:
+  allow_implicit_invocation: true
