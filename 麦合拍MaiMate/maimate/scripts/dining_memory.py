@@ -14,10 +14,7 @@ from confirmation import digest
 from mcd_adapter import ROOT
 
 
-ALIASES = {'穷鬼套餐': '1+1超值', '穷鬼': '1+1超值', '随心配': '1+1超值',
-           '超值1+1': '1+1超值', '1加1': '1+1超值', '一加一': '1+1超值'}
 FOOD_TERMS = {
-    '1+1超值': r'1\s*\+\s*1|穷鬼|随心配|一加一|1加1',
     '牛肉': r'牛肉|牛堡|巨无霸|安格斯', '鸡肉': r'鸡肉|鸡腿|鸡堡',
     '鱼肉': r'鱼肉|鱼堡|鳕鱼', '不辣': r'不辣|不要辣|不能辣',
     '辣味': r'爱吃辣|喜欢辣|要辣|辣味|^辣$', '无糖饮料': r'无糖|零度',
@@ -35,25 +32,63 @@ def normalized(value):
 
 def canonical(value, aliases=None):
     result = unicodedata.normalize('NFKC', str(value))
-    for name, target in sorted({**ALIASES, **(aliases or {})}.items(), key=lambda pair: -len(pair[0])):
-        result = result.replace(name, target)
-    return result
+    # One substitution pass: learned nicknames cannot cascade into each other.
+    mapping = aliases or {}
+    if not mapping:
+        return result
+    pattern = '|'.join(re.escape(k) for k in sorted(mapping, key=len, reverse=True))
+    return re.sub(pattern, lambda match: mapping[match[0]], result)
 
 
-def family(value, aliases=None):
-    text = normalized(canonical(value, aliases))
-    return '1+1超值' if '1+1' in text else None
+def alias_target(value, aliases=None):
+    for name, target in sorted((aliases or {}).items(), key=lambda pair: -len(pair[0])):
+        if name in value and not re.search(r'(?:不要|不想吃|不吃|不喜欢|别推荐|不是|除了|换掉)[^，。；;]{0,6}' + re.escape(name), value):
+            return target
+    return None
 
 
-def requested_family(value, aliases=None):
-    text = canonical(value, aliases)
-    if re.search(r'(?:不要|不想吃|不吃|不喜欢|不爱吃|别推荐|不是|除了|换掉)[^，。；;]{0,6}1\s*\+\s*1|1\s*\+\s*1[^，。；;]{0,6}(?:不要|不想吃|不吃)', text):
-        return None
-    return family(text)
+def menu_matches(value, meals, aliases=None):
+    """Resolve names only against this store's catalog, never a food ontology.
+
+    Exact names outrank abbreviations. An abbreviation can yield several SKUs;
+    callers must ask the user rather than treating the first as a selection.
+    """
+    # A real full menu name is stronger evidence than a nickname substring.
+    text = unicodedata.normalize('NFKC', str(value))
+    if not any(normalized(m.get('name', '')) and normalized(m['name']) in normalized(text) for m in meals.values() if isinstance(m, dict)):
+        text = canonical(text, aliases)
+    clauses = [v for v in re.split(r'[，,。；;\n]|但是|不过', text)
+               if not re.search(r'不要|不想吃|不吃|不喜欢|别推荐|不是|除了|换掉', v)]
+    positive = normalized('；'.join(clauses))
+    exact = [str(code) for code, meal in meals.items() if isinstance(meal, dict)
+             and normalized(meal.get('name', '')) and normalized(meal['name']) in positive]
+    if exact:
+        # Avoid a shorter SKU name embedded in the full requested SKU name.
+        return [code for code in exact if not any(code != other and normalized(meals[code]['name']) in normalized(meals[other]['name']) for other in exact)]
+    phrases = []
+    for clause in clauses:
+        clause = re.sub(r'[（(].*?[）)]', '', clause)
+        clause = re.sub(r'^(?:记住[，,]?|今天|这次|我现在|我|现在|就|请|帮我|给我|要吃|想吃|想要|要|来|点|换成|换个|选|一份|一个|吃)+', '', clause.strip())
+        clause = re.sub(r'(?:套餐)?[×x]\s*\d+.*$|(?:吗|吧|啊|呀|呢|谢谢|[?？!！。])+$', '', clause)
+        phrase = normalized(clause)
+        if len(phrase) >= 3:
+            phrases.append(phrase)
+    matched = []
+    for code, meal in meals.items():
+        if not isinstance(meal, dict):
+            continue
+        name = normalized(meal.get('name', ''))
+        for phrase in phrases:
+            it = iter(name)
+            if phrase in name or len(phrase) >= 4 and len(phrase) / max(1, len(name)) >= .55 and all(ch in it for ch in phrase):
+                matched.append(str(code))
+                break
+    return matched
 
 
-def family_matches(name, target):
-    return target == '1+1超值' and ('1+1' in normalized(name) or '随心配' in str(name))
+def alias_definition(text):
+    match = re.fullmatch(r'(?:记住[，,：:\s]*)?(?:以后)?[“"]?([^\s，。；;：:"”]{1,16})[”"]?(?:就是|代指|指的是|是我说的)[“"]?([^，。；;"”]{1,60})[”"]?[。]?', text.strip())
+    return match.groups() if match else None
 
 
 def redact(text, limit=2000):
@@ -80,7 +115,7 @@ class DiningMemory:
     @staticmethod
     def empty():
         return {'enabled': True, 'likes': [], 'dislikes': [], 'choices': {}, 'aliases': {},
-                'evidence': {}, 'feedback': {}, 'last_selection': None, 'revision': 0}
+                'alias_evidence': {}, 'evidence': {}, 'feedback': {}, 'last_selection': None, 'revision': 0}
 
     def profile(self, actor):
         with self.lock, sqlite3.connect(self.path) as db:
@@ -112,6 +147,14 @@ class DiningMemory:
     def forget(self, actor, text):
         with self.lock:
             profile = self.profile(actor)
+            # A nickname row has its own delete control. Removing it must not
+            # erase the user's independently learned taste for its target.
+            alias = next((key for key in profile['aliases'] if normalized(key) == normalized(text)), None)
+            if alias is not None:
+                del profile['aliases'][alias]
+                profile['alias_evidence'].pop(alias, None)
+                self._save(actor, profile)
+                return [alias]
             needle = normalized(canonical(text, profile['aliases']))
             removed = []
             for key in ('likes', 'dislikes'):
@@ -126,6 +169,7 @@ class DiningMemory:
             for key, value in list(profile['aliases'].items()):
                 if normalized(key) in needle or normalized(value) in needle:
                     del profile['aliases'][key]
+                    profile['alias_evidence'].pop(key, None)
                     removed.append(key)
             for key in list(profile['feedback']):
                 if normalized(key) in needle or needle in normalized(key):
@@ -144,22 +188,29 @@ class DiningMemory:
         Models cannot write memories. One-off orders, quotations, questions,
         negated memories, medical statements, and instruction text are excluded.
         """
-        if not isinstance(text, str) or SENSITIVE.search(text) or re.search(r'[?？“”「」"<>]|不要记|别记|不记|清除|忘掉|忘记', text):
+        if not isinstance(text, str) or SENSITIVE.search(text) or re.search(r'[?？<>]|不要记|别记|不记|清除|忘掉|忘记', text):
             return []
         positive = re.compile(r'(?:我(?:平时|通常|一直|一般|最|很|特别|比较|更|最近|现在)?(?:都)?(?:喜欢|爱吃|爱喝|偏爱|中意)|以后(?:优先|多推荐))')
         negative = re.compile(r'(?:我(?:平时|通常|一直|一般|最近|现在)?(?:都)?(?:不喜欢|不太喜欢|不再喜欢|不爱吃|不爱喝|讨厌|不吃|不喝)|以后(?:不要推荐|不推荐))')
-        alias_match = re.fullmatch(r'(?:记住[，,：:\s]*)?(?:以后)?[“"]?([^\s，。；;：:"”]{1,16})[”"]?(?:就是|代指|指的是|是我说的)([^，。；;]{1,60})[。]?', text.strip())
+        alias_match = alias_definition(text)
+        if not alias_match and re.search(r'[“”「」"]', text):
+            return []
         with self.lock:
             profile = self.profile(actor)
             if not profile['enabled']:
                 return []
             updates = []
             if alias_match:
-                name, target = alias_match.groups()
-                target = canonical(target.strip(), profile['aliases'])
-                if name not in ALIASES and (family(target) or target in menu_names) and len(profile['aliases']) < 20:
-                    target = family(target) or target
+                name, target = alias_match
+                target = target.strip()
+                if target not in menu_names:
+                    target = canonical(target, profile['aliases'])
+                targets = menu_matches(target, {str(i): {'name': v} for i, v in enumerate(menu_names)})
+                if len(targets) == 1:
+                    target = list(menu_names)[int(targets[0])]
+                if target in menu_names and name != target and (name in profile['aliases'] or len(profile['aliases']) < 20):
                     profile['aliases'][name] = target
+                    profile['alias_evidence'][name] = {'source': 'user_definition', 'updated_at': time.time()}
                     updates.append(name + '＝' + target)
             first_person = False
             for clause in re.split(r'[，,。；;！!\n]|但是|不过|而且|并且|但|而', text):
@@ -205,7 +256,6 @@ class DiningMemory:
             if not profile['enabled']:
                 return
             profile['last_selection'] = {'name': name, 'id': selection_id or digest([name, time.time()]), 'at': time.time()}
-            name = family(name, profile['aliases']) or name
             profile['choices'][name] = min(1000, profile['choices'].get(name, 0) + 1)
             profile['choices'] = dict(sorted(profile['choices'].items(), key=lambda item: -item[1])[:30])
             self._save(actor, profile)
@@ -257,7 +307,8 @@ class DiningMemory:
         profile = self.profile(actor)
         return {'enabled': profile['enabled'], 'likes': profile['likes'], 'dislikes': profile['dislikes'],
                 'often_selected': [{'name': name, 'selections': count} for name, count in profile['choices'].items() if count >= 2][:5],
-                'aliases': {**ALIASES, **(profile['aliases'] if profile['enabled'] else {})},
+                'aliases': dict(profile['aliases']) if profile['enabled'] else {},
+                'alias_evidence': profile['alias_evidence'] if profile['enabled'] else {},
                 'insights': self.reflections(actor), 'evidence': profile['evidence'],
                 'last_selection': profile['last_selection'] if profile['enabled'] else None,
                 'revision': profile['revision']}

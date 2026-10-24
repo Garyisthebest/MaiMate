@@ -16,8 +16,8 @@ function paint(data){
  if(!memory.insights?.length)row($('feedbackMemories'),'这页等你吃完再写','选过餐品后，发“这餐好吃”“这餐一般”或“这餐不喜欢”。');
  for(const item of memory.often_selected)row($('choiceMemories'),item.name,'明确选择过'+item.selections+'次',true);
  if(!memory.often_selected.length)row($('choiceMemories'),'不急着下结论','还没有多次选过的餐品。');
- const aliases=new Map();for(const [alias,target] of Object.entries(memory.aliases)){if(!aliases.has(target))aliases.set(target,[]);aliases.get(target).push(alias);}
- for(const [target,names] of aliases)row($('aliasMemories'),target,names.join('、'));
+ for(const [alias,target] of Object.entries(memory.aliases||{})){const evidence=memory.alias_evidence?.[alias];row($('aliasMemories'),alias,'对应：'+target+' · '+(evidence?'你明确教过我 · '+new Date(evidence.updated_at*1000).toLocaleDateString('zh-CN'):'来自已有昵称记录'),true);}
+ if(!Object.keys(memory.aliases||{}).length)row($('aliasMemories'),'昵称由你来教','选店后说“昵称就是菜单中的餐品名”，核实后才会保存。');
 }
 async function load(){const selected=source();try{const r=await fetch(selected==='web'?'/api/agent/memory':'/api/weixin/recent');const data=await r.json();if(!r.ok)throw Error(data.error||'无法读取手记');if(selected===source())paint(data.memory);}catch(e){$('memoryNotice').textContent=e.message;}}
 async function change(operation,name){

@@ -48,7 +48,7 @@ function paintMemory(memory){
     '不喜欢：'+(memory.dislikes.join('、')||'尚未记录')];
   if(memory.often_selected.length)lines.push('多次选择：'+memory.often_selected.map(x=>x.name+'（'+x.selections+'次）').join('、')+'；不代表已付款');
   if(memory.insights?.length)lines.push('餐后反馈：'+memory.insights.map(x=>x.name+'（'+({positive:'好评',negative:'少推荐',mixed:'继续了解'})[x.signal]+'）').join('、'));
-  lines.push('穷鬼套餐＝1+1超值；完整记录见口味手记');
+  lines.push('你教过的昵称：'+(Object.entries(memory.aliases||{}).map(([name,target])=>name+'＝'+target).join('、')||'尚未记录')+'；完整记录见口味手记');
   $('memorySummary').textContent=lines.join('\n');
 }
 async function loadRecent(showTurns=false){

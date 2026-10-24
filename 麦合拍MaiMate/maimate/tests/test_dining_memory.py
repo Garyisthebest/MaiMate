@@ -3,7 +3,7 @@ import json
 import pytest
 
 from confirmation import ConfirmationLedger
-from dining_memory import DiningMemory, family, family_matches, redact, requested_family
+from dining_memory import DiningMemory, alias_target, canonical, menu_matches, redact
 from location_service import LocationResolver
 from mcd_adapter import AdapterError
 from ordering_agent import OrderingAgent
@@ -15,18 +15,17 @@ def memory(tmp_path):
     return DiningMemory(tmp_path / 'preferences.sqlite3')
 
 
-@pytest.mark.parametrize('name', ['穷鬼套餐', '穷鬼', '随心配', '一加一', '1加1', '超值1+1', '１＋１超值'])
-def test_food_aliases_resolve_to_family_not_invented_codes(name):
-    assert family(name) == '1+1超值'
-    assert family_matches('精选超值随心配', family(name))
-    assert not family_matches('巨无霸套餐', family(name))
+@pytest.mark.parametrize('name', ['穷鬼套餐', '穷鬼', '随心配', '一加一', '1加1', '超值1+1'])
+def test_no_builtin_nickname_mapping(name):
+    assert canonical(name) == name
+    assert alias_target(name) is None
 
 
 def test_explicit_preferences_persist_without_raw_chats_or_actor(memory):
-    phrase = '记住，我爱吃穷鬼套餐，平时备注不用存'
-    assert memory.learn('private-owner-identifier', phrase) == ['偏爱1+1超值']
+    phrase = '记住，我爱吃精选超值随心配，平时备注不用存'
+    assert memory.learn('private-owner-identifier', phrase, ['精选超值随心配']) == ['偏爱精选超值随心配']
     restored = DiningMemory(memory.path)
-    assert restored.summary('private-owner-identifier')['likes'] == ['1+1超值']
+    assert restored.summary('private-owner-identifier')['likes'] == ['精选超值随心配']
     assert restored.summary('another')['likes'] == []
     raw = memory.path.read_bytes()
     assert phrase.encode() not in raw and b'private-owner-identifier' not in raw
@@ -34,10 +33,10 @@ def test_explicit_preferences_persist_without_raw_chats_or_actor(memory):
 
 
 @pytest.mark.parametrize('phrase', [
-    '今天来一份穷鬼套餐', '今天我喜欢鸡肉', '朋友说我喜欢穷鬼套餐',
-    '比如我喜欢无糖饮料', '如果我喜欢穷鬼套餐', '我喜欢无糖饮料吗？',
-    '不要记住我喜欢穷鬼套餐', '我喜欢无糖饮料，token=fixture-secret',
-    '记住我喜欢无糖，因为我有糖尿病', '“我爱吃穷鬼套餐”只是举个例子',
+    '今天来一份精选超值随心配', '今天我喜欢鸡肉', '朋友说我喜欢精选超值随心配',
+    '比如我喜欢无糖饮料', '如果我喜欢精选超值随心配', '我喜欢无糖饮料吗？',
+    '不要记住我喜欢精选超值随心配', '我喜欢无糖饮料，token=fixture-secret',
+    '记住我喜欢无糖，因为我有糖尿病', '“我爱吃精选超值随心配”只是举个例子',
     '记住我的手机号13900000000',
 ])
 def test_transient_quoted_sensitive_or_hypothetical_text_is_not_memory(memory, phrase):
@@ -58,12 +57,12 @@ def test_preference_correction_disable_forget_and_clear(memory):
     memory.control('owner', 'clear')
     assert not memory.summary('owner')['enabled']
     memory.control('owner', 'enable')
-    assert memory.learn('owner', '我爱吃穷鬼套餐')
+    assert memory.learn('owner', '我爱吃薯条')
 
 
 def test_custom_food_aliases_have_verified_targets(memory):
-    assert memory.learn('owner', '省钱饭就是1+1超值') == ['省钱饭＝1+1超值']
-    assert family('省钱饭', memory.summary('owner')['aliases']) == '1+1超值'
+    assert memory.learn('owner', '省钱饭就是精选超值随心配', ['精选超值随心配']) == ['省钱饭＝精选超值随心配']
+    assert alias_target('省钱饭', memory.summary('owner')['aliases']) == '精选超值随心配'
     assert memory.learn('owner', '魔法饭就是神奇套餐') == []
     assert '魔法饭' not in memory.summary('owner')['aliases']
     memory.control('owner', 'disable')
@@ -74,7 +73,7 @@ def test_repeated_choices_are_weaker_than_explicit_likes(memory):
     memory.observe('owner', '精选超值随心配')
     assert memory.summary('owner')['often_selected'] == []
     memory.observe('owner', '精选超值随心配')
-    assert memory.summary('owner')['often_selected'] == [{'name': '1+1超值', 'selections': 2}]
+    assert memory.summary('owner')['often_selected'] == [{'name': '精选超值随心配', 'selections': 2}]
     assert memory.summary('owner')['likes'] == []
 
 
@@ -86,22 +85,24 @@ def agent(tmp_path):
         data = original(name, args)
         if name == 'query-meals':
             data['meals']['value-1'] = {'name': '精选超值随心配', 'currentPrice': '13.9'}
+        elif name == 'query-meal-detail' and args['code'] == 'value-1':
+            data['name'] = '精选超值随心配'
         return data
     app.query = query
     return OrderingAgent(app, NoModel(), LocationResolver(), ConfirmationLedger(tmp_path / 'ledger.sqlite3'))
 
 
 def test_city_is_requested_before_search_and_food_request_survives(agent):
-    result = agent.chat('owner', '示例广场店，想吃穷鬼套餐')
+    result = agent.chat('owner', '示例广场店，想吃精选超值随心配')
     assert '城市' in result['reply']
     assert agent.app.adapter.calls == []
-    assert '1+1超值' in agent.session('owner').request['preference']
+    assert '精选超值随心配' in agent.session('owner').request['preference']
     stores = agent.chat('owner', '北京')
     assert stores['stores']
     assert agent.app.adapter.calls[-1][1]['city'] == '北京'
     recommended = agent.chat('owner', '选店1')
     assert [m['code'] for m in recommended['recommendations']] == ['value-1']
-    assert '1+1超值' in recommended['reply']
+    assert '精选超值随心配' in recommended['reply']
     assert not agent.app.adapter.writes
 
 
@@ -113,17 +114,17 @@ def test_missing_value_menu_is_honest_and_view_menu_still_works(agent):
             data['meals'].pop('value-1')
         return data
     agent.app.query = query
-    agent.chat('owner', '上海人民广场，想吃穷鬼套餐')
+    agent.chat('owner', '上海人民广场，想吃精选超值随心配')
     result = agent.chat('owner', '选店1')
     assert result['recommendations'] == []
-    assert '没有返回' in result['reply']
+    assert '没有匹配' in result['reply']
     assert agent.chat('owner', '查看菜单')['recommendations']
     assert not agent.app.adapter.writes
 
 
 def test_value_family_is_kept_visible_beyond_first_200_menu_items(agent):
     session = agent.session('owner')
-    session.request['preference'] = '穷鬼套餐'
+    session.request['preference'] = '人气随心配'
     session.catalog = {'meals': {**{f'p{i}': {'name': f'常规汉堡{i}'} for i in range(240)},
                                  'real-value': {'name': '人气经典随心配'}}}
     context = session.context()
@@ -132,12 +133,12 @@ def test_value_family_is_kept_visible_beyond_first_200_menu_items(agent):
 
 
 def test_long_term_likes_are_soft_and_current_food_request_wins(agent):
-    assert '记住了' in agent.chat('owner', '记住，我爱吃穷鬼套餐')['reply']
+    agent.memory.learn('owner', '我爱吃精选超值随心配', ['精选超值随心配'])
     agent.chat('owner', '上海人民广场')
     result = agent.chat('owner', '选店1')
     assert result['recommendations'][0]['code'] == 'value-1'
     result = agent.chat('owner', '今天想吃牛肉套餐')
-    assert result['recommendations'][0]['code'] == 'meal-1'
+    assert result['cart']['name'] == '牛肉汉堡套餐'
     assert not agent.app.adapter.writes
 
 
@@ -197,7 +198,7 @@ def test_failed_store_read_has_explicit_retry_that_really_queries(agent):
             raise AdapterError('business_error', '麦当劳业务接口报告失败；未自动重试')
         return original(name, args)
     agent.app.query = query
-    result = agent.chat('owner', '上海人民广场，想吃穷鬼套餐')
+    result = agent.chat('owner', '上海人民广场，想吃精选超值随心配')
     assert '查询门店未成功' in result['reply'] and '重试' in result['reply']
     assert agent.app.adapter.calls == []
     result = agent.chat('owner', '重试')
@@ -214,7 +215,7 @@ def test_rejected_city_error_can_be_corrected_without_reentering_food(agent):
             raise AdapterError('business_city_required', '官方门店查询需要有效城市')
         return original(name, args)
     agent.app.query = query
-    assert '有效城市' in agent.chat('owner', '上海人民广场，想吃穷鬼套餐')['reply']
+    assert '有效城市' in agent.chat('owner', '上海人民广场，想吃精选超值随心配')['reply']
     assert agent.chat('owner', '北京')['stores']
     assert agent.chat('owner', '选店1')['recommendations'][0]['code'] == 'value-1'
 
@@ -237,10 +238,10 @@ def test_memory_commands_do_not_authorize_or_invalidate_a_current_preview(agent)
 
 
 def test_negating_a_food_alias_does_not_force_that_food(agent):
-    assert requested_family('今天不要穷鬼套餐，想吃牛肉') is None
+    assert alias_target('今天不要省钱饭，想吃牛肉', {'省钱饭': '精选超值随心配'}) is None
     agent.chat('owner', '上海人民广场')
     agent.chat('owner', '选店1')
-    result = agent.chat('owner', '今天不要穷鬼套餐，想吃牛肉')
+    result = agent.chat('owner', '今天不要精选超值随心配，想吃牛肉')
     assert [v['code'] for v in result['recommendations']] == ['meal-1']
 
 
@@ -285,9 +286,9 @@ def test_weixin_recent_and_controls_never_send_messages(agent, tmp_path):
     assert bridge.recent()['memory'] is None
     bridge.account = {'owner_id': 'private-owner', 'bot_id': 'fixture', 'bot_token': 'secret', 'base_url': 'https://ilinkai.weixin.qq.com'}
     actor = bridge.owner_actor()
-    agent.chat(actor, '记住，我爱吃穷鬼套餐')
+    agent.chat(actor, '记住，我爱吃麦乐鸡')
     recent = bridge.recent()
-    assert recent['memory']['likes'] == ['1+1超值']
+    assert recent['memory']['likes'] == ['麦乐鸡']
     assert recent['turns']
     assert 'private-owner' not in json.dumps(recent)
     assert not bridge.memory_control({'operation': 'disable'})['memory']['enabled']
@@ -296,8 +297,8 @@ def test_weixin_recent_and_controls_never_send_messages(agent, tmp_path):
 
 
 def test_joined_first_person_preferences_and_later_corrections(memory):
-    memory.learn('owner', '记住，我爱吃穷鬼套餐，喜欢无糖饮料，也爱吃薯条')
-    assert set(memory.summary('owner')['likes']) == {'1+1超值', '无糖饮料', '薯条'}
+    memory.learn('owner', '记住，我爱吃麦乐鸡，喜欢无糖饮料，也爱吃薯条')
+    assert set(memory.summary('owner')['likes']) == {'麦乐鸡', '无糖饮料', '薯条'}
     memory.learn('owner', '我喜欢普通可乐')
     assert '含糖饮料' in memory.summary('owner')['likes']
     assert '无糖饮料' not in memory.summary('owner')['likes']

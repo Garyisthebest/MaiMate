@@ -9,7 +9,7 @@ import time
 import uuid
 
 from confirmation import ConfirmationLedger, digest
-from dining_memory import DiningMemory, canonical, family, family_matches, normalized, redact, requested_family
+from dining_memory import DiningMemory, alias_definition, alias_target, canonical, menu_matches, normalized, redact
 from mcd_adapter import AdapterError
 from quick_order import money_cents
 
@@ -20,7 +20,7 @@ HELP = ('我是麦合拍MaiMate，帮你从选餐走到官方付款。\n'
         '看到门店、餐品和最终金额后，回复“确认下单”，即可获取官方付款链接。\n'
         '也支持“3人吃”“30元以内”；人数、预算都不是必填。\n'
         '查进度发“订单状态”，新点一单发“重新点餐”。\n'
-        '“穷鬼套餐”按1+1超值理解；可说“记住，我爱吃穷鬼套餐”。\n'
+        '昵称由你教给我：选店后可说“小确幸就是某个真实餐品名”。\n'
         '查看偏好发“我的偏好”，也支持“忘记无糖”“清除偏好”“关闭记忆”。\n'
         '吃完可说“这餐好吃”“这餐一般”“这餐不喜欢”，再发“口味复盘”看看推荐如何变化。\n'
         '账户信息发“账号说明”，查积分发“我的积分”，查券发“我的优惠券”。')
@@ -152,9 +152,8 @@ class OrderSession:
 
     def context(self):
         meals = self.catalog.get('meals', {}) if self.catalog else {}
-        target = requested_family(self.request.get('preference', ''), self.preferences.get('aliases'))
-        # Keep a requested family visible even when it is beyond item 200.
-        menu = sorted(meals.items(), key=lambda item: not family_matches(item[1].get('name', ''), target) if isinstance(item[1], dict) else True)
+        targets = menu_matches(self.request.get('preference', ''), meals, self.preferences.get('aliases'))
+        menu = sorted(meals.items(), key=lambda item: str(item[0]) not in targets)
         return {'phase': self.phase, 'request': self.request, 'store': self.store,
                 'pending_store_search': self.search_pending, 'search_city': self.search_city,
                 'stores': [{'index': i, 'name': s.get('storeName')} for i, s in enumerate(self.stores, 1)],
@@ -331,8 +330,17 @@ class OrderingAgent:
                     return self.view(s, HELP, ['我到店了，推荐套餐', '定位', '订单状态'])
                 names = [m.get('name', '') for m in (s.catalog or {}).get('meals', {}).values() if isinstance(m, dict)]
                 learned = self.memory.learn(actor, text, names)
+                # Explicit in-use explanation, e.g. "我要某餐品（即我的昵称）".
+                definition = re.fullmatch(r'(.{1,80}?)[（(](?:即|也就是|我叫它)([^（）()，。]{1,16})[）)]', text)
+                if definition and not re.search(r'[?？]|不是|不要|如果|比如|朋友|同事', text):
+                    target_codes = menu_matches(definition[1], (s.catalog or {}).get('meals', {}))
+                    if len(target_codes) == 1:
+                        target_name = s.catalog['meals'][target_codes[0]]['name']
+                        learned += self.memory.learn(actor, definition[2] + '就是' + target_name, names)
                 s.preferences = self.memory.summary(actor)
-                if learned and not re.search(r'今天|这次|本次|帮我|来一|点一|想吃|给我|推荐', text):
+                if alias_definition(text) and not learned:
+                    return self.view(s, '这条昵称还没有保存。请先选店，再用“昵称就是菜单中的完整餐品名”教我；记忆需开启，目标也必须能在当前菜单核实。', ['查看菜单'])
+                if learned and not re.search(r'今天|这次|本次|帮我|来一|点一|想吃|给我|推荐|我要|要吃', text):
                     return self.view(s, '记住了：' + '、'.join(learned) + '。以后推荐会参考这些偏好；你这次的要求优先。可发“我的偏好”查看。')
                 if s.unknown:
                     return self.view(s, '存在提交结果未知的订单，已阻止继续下单。请在麦当劳官方客户端核查；刷新页面或重启不会解除锁定。')
@@ -342,12 +350,14 @@ class OrderingAgent:
                         if intent['action'] == 'chat':
                             return self._intent(s, intent, text)
                     return self.view(s, '这一单已经创建。可以发“订单状态”查进度；如要另点一单，请明确发送“重新点餐”。', ['订单状态'])
-                if text in ('算了', '不要了', '取消选餐', '清空餐单'):
+                if text in ('算了', '不要了', '取消', '取消选餐', '清空餐单'):
                     s.pending = None
                     s.detail = s.item = s.quote = None
                     s.components = s.options = []
                     s.phase = 'recommendations' if s.candidates else 'location'
                     return self.view(s, '已清空未提交的选餐，没有创建订单。可以重新挑套餐。')
+                if re.search(r'不是这个|不要这个|点错了|搞错了|选错了|不是我要的', text):
+                    s.pending = None
                 if text in ('重新点餐', '重来', '重新开始'):
                     if s.unknown:
                         return self.view(s, '上一笔提交的结果仍未知，请先在麦当劳官方客户端核查，不能通过重新点餐绕过重复提交保护。')
@@ -376,7 +386,7 @@ class OrderingAgent:
                 if text in ('按老样子', '按老样子推荐', '你了解我，帮我选', '来点新鲜的', '换换口味'):
                     if text.startswith('按') or text.startswith('你了解'):
                         if not s.preferences.get('enabled') or not (s.preferences.get('likes') or s.preferences.get('often_selected') or s.preferences.get('insights')):
-                            return self.view(s, '还没有足够的口味依据。你更想吃牛肉、鸡肉，还是先看看1+1超值？也可以说“记住，我喜欢……”让我以后参考。')
+                            return self.view(s, '还没有足够的口味依据。你更想吃牛肉、鸡肉，还是先看看菜单？也可以说“记住，我喜欢……”让我以后参考。')
                     s.pending = None
                     s.request['explore'] = text in ('来点新鲜的', '换换口味')
                     # These phrases replace the previous main-meal request,
@@ -407,6 +417,41 @@ class OrderingAgent:
                     s.pending = None
                     s.request.pop('budget_cents', None)
                     return self._recommend(s) if s.store else self.view(s, '已取消本单预算限制。先选门店即可继续。')
+                # Resolve a named main meal before model indices or an old cart.
+                # Option changes/questions stay in the normal interpretation path.
+                if s.store and s.catalog and not re.search(r'不要|不想吃|不吃|不喜欢|不是|为什么|区别|喜[欢好]|爱吃|搭配|如果|假如|比如|朋友|同事', text):
+                    target = alias_target(text, s.preferences.get('aliases'))
+                    actual_names = [normalized(m.get('name', '')) for m in s.catalog['meals'].values() if isinstance(m, dict)]
+                    full_name_present = any(name and name in normalized(text) for name in actual_names)
+                    if target and not full_name_present and normalized(target) not in actual_names:
+                        s.request['preference'] = text
+                        return self._recommend(s)
+                    matches = menu_matches(text, s.catalog['meals'], s.preferences.get('aliases'))
+                    if matches:
+                        s.pending = None
+                        previous = s.request.get('preference', '')
+                        retained = [v for v in ('无糖', '去冰', '普通可乐', '正常冰') if v in previous]
+                        s.request['preference'] = '；'.join(retained + [text])
+                        quantity = re.search(r'(?:[×x]\s*(\d{1,2})|(\d{1,2})\s*份)', text)
+                        if quantity:
+                            count = int(quantity[1] or quantity[2])
+                            if not 1 <= count <= 20:
+                                raise AdapterError('invalid_input', '每单支持1–20份，请明确数量')
+                            s.request['count'] = count
+                        if '堂食' in text:
+                            s.request['takeway'] = '堂食'
+                        elif re.search(r'打包|外带|带走', text):
+                            s.request['takeway'] = '打包'
+                        if len(matches) == 1 and not re.search(r'[?？]|有没有|有吗|看看|推荐|多少钱', text):
+                            return self._meal(s, matches[0])
+                        return self._recommend(s, matches)
+                    target = alias_target(text, s.preferences.get('aliases'))
+                    if target:
+                        s.request['preference'] = text
+                        return self._recommend(s)
+                    if re.search(r'套餐|汉堡|随心配', text) and not re.search(r'推荐|牛肉|鸡肉|鱼肉|实惠|便宜|划算', text):
+                        s.request['preference'] = text
+                        return self._recommend(s)
                 if self.model.status()['configured']:
                     try:
                         intent = self.model.interpret(text, s.context())
@@ -417,11 +462,6 @@ class OrderingAgent:
                         raise
                 else:
                     intent = self._fallback(s, text)
-                if requested_family(text, s.preferences.get('aliases')):
-                    intent['preference'] = canonical(text, s.preferences.get('aliases'))[:240]
-                    # Alias translation belongs to food selection, never location.
-                    if intent['action'] == 'search' and not intent.get('city') and not re.search(r'店|广场|路|市|区|中心', text):
-                        intent['action'] = 'recommend'
                 return self._intent(s, intent, text)
             except AdapterError as exc:
                 if exc.code in ('price_changed', 'confirmation_invalid'):
@@ -467,7 +507,7 @@ class OrderingAgent:
                 lines.append('多次选择（不代表已付款）：' + '、'.join(v['name'] + f"（{v['selections']}次）" for v in memory['often_selected']))
             if memory['insights']:
                 lines.append('餐后反馈：' + '、'.join(v['name'] + '（' + {'positive': '好评', 'negative': '少推荐', 'mixed': '待了解'}[v['signal']] + '）' for v in memory['insights']))
-            lines += ['套餐别名：穷鬼套餐＝1+1超值；具体可售搭配和价格以当前门店为准。',
+            lines += ['你教过的昵称：' + ('、'.join(k + '＝' + v for k, v in memory['aliases'].items()) or '尚未记录'),
                       '可发“记住，我喜欢无糖饮料”“忘记无糖”“清除偏好”“关闭记忆”。']
             return '\n'.join(lines)
         return None
@@ -527,8 +567,8 @@ class OrderingAgent:
         explicit = s.request.get('preference', '')
         memory = s.preferences if s.preferences.get('enabled') else {}
         defaults = list(memory.get('likes', []))
-        # A current named food/family wins over remembered food choices.
-        if family(explicit, memory.get('aliases')) or re.search(r'牛|鸡|鱼|堡|薯条|麦旋风|玉米|套餐', explicit):
+        # A current named food wins over remembered food choices.
+        if alias_target(explicit, memory.get('aliases')) or menu_matches(explicit, (s.catalog or {}).get('meals', {}), memory.get('aliases')) or re.search(r'牛|鸡|鱼|堡|薯条|麦旋风|玉米|套餐', explicit):
             defaults = [p for p in defaults if p in ('无糖饮料', '去冰')]
         if re.search(r'含糖|有糖|普通可乐|正常可乐|不要无糖|不喝无糖|不要零度', explicit):
             defaults = [p for p in defaults if p != '无糖饮料']
@@ -673,10 +713,11 @@ class OrderingAgent:
         if action == 'select_store':
             return self._store_index(s, intent.get('store_index'))
         if action == 'select_meal':
-            if intent.get('meal_index'):
-                return self._meal_index(s, intent['meal_index'])
-            if intent.get('product_codes'):
+            reference = re.search(r'第|套餐\s*\d|方案\s*\d|[一二三123]号|就这个|就这个吧', text)
+            if intent.get('product_codes') and reference:
                 return self._meal(s, intent['product_codes'][0])
+            if intent.get('meal_index') and reference:
+                return self._meal_index(s, intent['meal_index'])
             return self.view(s, '请选择刚才列出的套餐，或直接说餐品名称。')
         if action == 'modify':
             if intent.get('changes'):
@@ -757,16 +798,21 @@ class OrderingAgent:
         s.phase = 'recommendations'
         meals = s.catalog['meals']
         preference = self._preference(s)
-        target_family = requested_family(s.request.get('preference', ''), s.preferences.get('aliases'))
-        # Recognized colloquial names resolve against real menu names before
-        # consulting a model. Never fabricate a SKU, price, or 1+1 composition.
-        if target_family:
-            codes = [str(code) for code, meal in meals.items()
-                     if isinstance(meal, dict) and family_matches(meal.get('name', ''), target_family)]
-            if not codes:
-                s.candidates = []
-                s.phase = 'recommendations'
-                return self.view(s, '“穷鬼套餐”按1+1超值理解，但这家店当前可售菜单没有返回可核实的1+1商品。不能把其他套餐或两件单品冒充该优惠；可换店或查看菜单。', ['查看菜单'])
+        named_codes = menu_matches(s.request.get('preference', ''), meals, s.preferences.get('aliases'))
+        target = alias_target(s.request.get('preference', ''), s.preferences.get('aliases'))
+        raw_preference = normalized(s.request.get('preference', ''))
+        full_name_present = any(normalized(m.get('name', '')) and normalized(m['name']) in raw_preference for m in meals.values() if isinstance(m, dict))
+        if target and not full_name_present and not any(normalized(m.get('name', '')) == normalized(target) for m in meals.values() if isinstance(m, dict)):
+            return self.view(s, '你教过的昵称对应“' + target + '”，但这家店当前菜单没有返回这个餐品。请选其他餐品或换店；不会用别的套餐替代。', ['查看菜单'])
+        if named_codes:
+            codes = named_codes
+        else:
+            # Unknown specific names must not fall through to generic ranking.
+            raw = s.request.get('preference', '')
+            requested = re.search(r'(?:想吃|要吃|我要|来一份|点一份|换成)([^，。；;（(]{3,40})', raw)
+            name = requested[1].strip() if requested else raw.strip()
+            if re.fullmatch(r'.{2,30}(?:套餐|汉堡|随心配)', name) and not re.search(r'推荐|实惠|便宜|划算|好吃|牛肉|鸡肉|鱼肉', name):
+                return self.view(s, '当前菜单没有匹配到“' + name + '”这个名称。若是你的昵称，请告诉我它对应哪个菜单餐品；我不会用其他套餐代替。', ['查看菜单'])
         if self.model.status()['configured'] and not codes:
             intent = self.model.interpret('根据当前门店真实菜单和我的最新需求，推荐最多三个餐品。长期偏好只用于排序，本次要求优先。', s.context())
             codes = intent.get('product_codes')
@@ -788,9 +834,9 @@ class OrderingAgent:
                 continue
             if re.search(r'不辣|不要辣|不能辣', preference) and '辣' in name:
                 continue
-            if target_family and codes and str(code) not in codes:
+            if named_codes and str(code) not in named_codes:
                 continue
-            if not target_family:
+            if not named_codes:
                 explicit = s.request.get('preference', '')
                 avoided = [w for w in ('牛', '鸡', '鱼') if re.search(r'(?:不想吃|不吃|不要|别推荐|不喜欢)[^，。；;]{0,3}' + w, explicit)]
                 if any(w in name for w in avoided):
@@ -804,18 +850,18 @@ class OrderingAgent:
             reasons = ['来自当前门店可售菜单']
             if s.request.get('budget_cents'):
                 reasons.append('菜单价在本次预算内，最终以官方算价为准')
-            if codes and str(code) in codes and not target_family:
+            if codes and str(code) in codes and not named_codes:
                 score += (3 - codes.index(str(code))) * 8
             for liked in memory.get('likes', []):
-                if normalized(liked) in normalized(name) or family_matches(name, family(liked)):
+                if normalized(liked) in normalized(name):
                     score += 80
                     reasons.append('你明确偏爱' + liked)
             for disliked in memory.get('dislikes', []):
-                if (normalized(disliked) in normalized(name) or family_matches(name, family(disliked))) and normalized(disliked) not in normalized(s.request.get('preference', '')):
+                if normalized(disliked) in normalized(name) and normalized(disliked) not in normalized(s.request.get('preference', '')):
                     score -= 100
                     reasons.append('你明确不喜欢的口味，会降低排序')
             for selected in memory.get('often_selected', []):
-                if normalized(selected['name']) in normalized(name) or family_matches(name, family(selected['name'])):
+                if normalized(selected['name']) in normalized(name):
                     score += min(20, selected['selections'] * 3)
                     reasons.append('你多次选过，不代表已购买')
             for feedback in memory.get('insights', []):
@@ -825,7 +871,7 @@ class OrderingAgent:
             familiar = [v['name'] for v in memory.get('often_selected', [])] + memory.get('likes', [])
             if memory.get('last_selection'):
                 familiar.append(memory['last_selection']['name'])
-            if s.request.get('explore') and any(normalized(v) in normalized(name) or family_matches(name, family(v)) for v in familiar):
+            if s.request.get('explore') and any(normalized(v) in normalized(name) for v in familiar):
                 score -= 100
                 reasons.append('这次想换口味，熟悉餐品往后放一点')
             pool.append({'code': str(code), 'name': name, 'reference_cents': cents,
@@ -836,8 +882,8 @@ class OrderingAgent:
         if not s.candidates:
             return self.view(s, '这家店的当前菜单里没找到符合需求的候选。可以改口味、取消预算限制或换店。')
         lines = [s.store.get('storeName', '') + '，给你这几个选择：']
-        if target_family:
-            lines.append('穷鬼套餐＝1+1超值；下面是这家店当前真实可选的商品。')
+        if named_codes:
+            lines.append('以下只列与你本次餐品名称匹配的商品；有多个时请明确选一个。')
         elif memory.get('likes') or memory.get('often_selected'):
             lines.append('已参考你的本地口味偏好，本次要求优先。')
         for i, c in enumerate(s.candidates, 1):

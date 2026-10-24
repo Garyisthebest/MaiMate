@@ -46,7 +46,7 @@ class Adapter:
     def validate(self, name, args):
         assert name == 'create-order'
         assert args['takeWayCode'] in {w['code'] for w in self.ways}
-        assert args['items'][0]['productCode'] in ('meal-1', 'meal-2')
+        assert args['items'][0]['productCode'] in ('meal-1', 'meal-2', 'value-1', 'value-2')
 
     @staticmethod
     def business_payload(value):
@@ -63,6 +63,7 @@ class Adapter:
         elif name == 'query-meal-detail':
             data = copy.deepcopy(DETAIL)
             data['code'] = args['code']
+            data['name'] = '鸡肉汉堡套餐' if args['code'] == 'meal-2' else DETAIL['name']
         elif name == 'calculate-price':
             data = {'price': self.price, 'takeWayList': self.ways, 'productList': copy.deepcopy(args['items'])}
         elif name == 'query-order':

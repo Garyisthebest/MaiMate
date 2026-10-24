@@ -224,11 +224,11 @@ def test_repeated_explicit_preference_is_acknowledged_without_ordering(agent):
 
 
 def test_exploration_replaces_previous_family_request_but_keeps_drink_need(agent):
-    agent.chat('owner','我爱吃穷鬼套餐，喜欢无糖饮料')
-    agent.chat('owner','上海人民广场，想吃穷鬼套餐')
+    agent.memory.learn('owner','我爱吃精选超值随心配，喜欢无糖饮料', ['精选超值随心配'])
+    agent.chat('owner','上海人民广场，想吃精选超值随心配')
     first=agent.chat('owner','选店1')
     assert [v['code'] for v in first['recommendations']]==['value-1']
     result=agent.chat('owner','换换口味')
     assert result['recommendations'][0]['code']!='value-1'
     assert '无糖' in agent.session('owner').request['preference']
-    assert '1+1超值' in agent.memory.summary('owner')['likes']
+    assert '精选超值随心配' in agent.memory.summary('owner')['likes']
