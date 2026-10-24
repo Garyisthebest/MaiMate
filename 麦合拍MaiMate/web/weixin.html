@@ -1,5 +1,7 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>微信点餐 · 麦合拍 MaiMate</title><link rel="stylesheet" href="/agent.css"><script src="/weixin.js" defer></script></head><body>
-<header class="app-header"><a class="brand" href="/"><span class="brand-icon">合</span><span>麦合拍<small>MaiMate · 你的饭搭子</small></span></a><nav><a href="/">管理后台</a><a href="/memory">口味手记</a><a href="/settings">设置</a></nav></header>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>微信点餐 · 麦合拍 MaiMate</title><link rel="stylesheet" href="/agent.css"><script src="/weixin.js" defer></script><link rel="stylesheet" href="/navigation.css"></head><body class="workspace">
+<!-- workspace-navigation -->
+<div class="workspace-content" id="workspace-content" tabindex="-1">
+
 <main class="settings-page"><h1 class="page-title">把点餐搭子，放进微信。</h1><p class="page-intro">只需扫码一次。此后到店选餐、换饮料、下单，直接聊天就行。</p><div class="channel-row">
 <section class="channel-surface"><span id="wxBadge" class="channel-badge">读取状态中</span><h2>连接你的个人微信</h2><p id="wxNotice" role="status"></p><div id="qrPanel" hidden><img id="wxQr" alt="用手机微信扫描此二维码连接麦合拍MaiMate"></div><form id="verifyForm" hidden><label for="verifyCode">手机上显示的配对数字</label><input id="verifyCode" inputmode="numeric" maxlength="12" autocomplete="one-time-code" required><button class="primary-button block" type="submit">确认配对</button></form><div class="channel-actions"><button id="wxLogin" class="primary-button">获取微信连接二维码</button><button id="wxResume" class="primary-button" hidden>恢复接收消息</button><button id="wxPause" class="secondary-button" hidden>暂停回复</button><button id="wxForget" class="quiet-button" hidden>删除本机绑定</button></div><p id="wxActivity"></p></section>
 <section class="channel-copy"><h2>到店后的三句话</h2><ol><li>“定位” 或发当前门店名</li><li>“推荐牛肉套餐，饮料无糖”</li><li>挑好后回复“确认下单”</li></ol><p>机器人返回麦当劳官方付款链接。付好后发“订单状态”，查看进度和取餐码。</p><p>在 <a href="/memory">口味手记</a><a href="/settings">设置</a> 填写千问／DeepSeek key，可理解更自由的说法。同页可启用微信定位链接。</p><p>电脑服务需要保持运行。使用 ./maimate.sh start 可在后台启动并恢复接收；只回复扫码绑定者，暂不接群。</p></section></div>
@@ -11,4 +13,4 @@
 <details id="recentDetails" class="recent-details"><summary>查看最近微信对话</summary><p class="settings-note">只显示本次运行期间最近20轮，重启清空。链接、密钥、手机号和坐标会隐藏；旧版没有保存的聊天无法补读。</p><button id="refreshRecent" class="secondary-button" type="button">刷新最近对话</button><div id="recentTurns" class="recent-turns" aria-live="polite"></div></details>
 </div></section>
 <section class="settings-section"><div class="settings-label"><h2>麦当劳账号</h2></div><div class="settings-content"><p class="settings-note">点餐使用申请当前 MCP Token 时授权的麦当劳账号。微信扫码只负责消息，不会切换麦当劳账号。可在微信发“账号说明”“我的积分”或“我的优惠券”。是否需要重新验证，以麦当劳官方付款页为准。</p></div></section>
-</main></body></html>
+</main></div></body></html>

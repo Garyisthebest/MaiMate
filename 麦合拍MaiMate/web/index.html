@@ -1,8 +1,10 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#C82028"><title>麦合拍 MaiMate · 你的饭搭子</title><link rel="stylesheet" href="/agent.css"><script src="/app.js" defer></script></head>
-<body>
-<header class="app-header"><a class="brand" href="/"><span class="brand-icon">合</span><span>麦合拍<small>MaiMate · 你的饭搭子</small></span></a><nav><a href="/">管理后台</a><span class="live-state" id="connection" role="status">连接中</span><a href="/weixin" class="nav-weixin">去微信用</a><a href="/memory">口味手记</a><a href="/settings">设置</a><button id="mobileTicket" class="ticket-toggle" aria-controls="orderPane">当前订单</button></nav></header>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#C82028"><title>麦合拍 MaiMate · 你的饭搭子</title><link rel="stylesheet" href="/agent.css"><script src="/app.js" defer></script><link rel="stylesheet" href="/navigation.css"></head>
+<body class="workspace workspace-chat">
+<!-- workspace-navigation -->
+<div class="workspace-content" id="workspace-content" tabindex="-1">
+<header class="chat-toolbar"><span class="live-state" id="connection" role="status">连接中</span><button id="mobileTicket" class="ticket-toggle" aria-controls="orderPane">当前订单</button></header>
 <main class="agent-layout">
 <section class="conversation" aria-label="点餐对话">
 <div class="chat-top"><div><h1>合口味，也合拍。</h1><p>记得你的口味，也听你今天想吃什么。</p></div><button id="newOrder" class="quiet-button">重新点餐</button></div>
@@ -12,4 +14,4 @@
 <div class="composer-wrap"><div class="memory-strip"><a href="/memory" id="memoryHint">口味手记</a><button class="quiet-button" data-message="我的偏好">你记住了什么</button><button class="quiet-button" data-message="评价上一餐">评价上一餐</button><button class="quiet-button" data-message="口味复盘">口味复盘</button></div><div id="activity" class="activity" role="status"></div><form id="chatForm" class="composer"><button id="locateButton" type="button" class="location-button" aria-label="使用当前位置" title="授权本次定位">⌖</button><label class="sr-only" for="chatInput">点餐需求</label><textarea id="chatInput" rows="1" maxlength="2000" placeholder="想吃什么，直接说。比如“第二个，饮料换无糖”"></textarea><button id="sendButton" class="send-button" type="submit" aria-label="发送需求">发送</button></form><p class="composer-note"><span id="modelState">正在读取模型连接</span><span>下单后在官方收银台确认付款</span></p></div>
 </section>
 <aside class="order-pane" id="orderPane" aria-label="当前订单"><button id="closeTicket" class="close-ticket" aria-label="收起当前订单">收起 ×</button><div class="ticket"><div class="ticket-band"><span>这一单</span><span class="ticket-mark" aria-hidden="true">合</span></div><div class="ticket-body" id="ticketBody"><div class="empty-ticket"><span class="order-symbol" aria-hidden="true">♨</span><h2>下一餐，听你的。</h2><p>选好套餐后，真实搭配、应付金额和取餐信息都在这里。</p><div class="ticket-flow"><span>选一家店</span><i></i><span>挑个套餐</span><i></i><span>确认下单</span></div></div></div><div class="ticket-teeth"></div></div><p class="order-footnote">门店、餐品和订单来自麦当劳中国 MCP。</p></aside>
-</main></body></html>
+</main></div></body></html>

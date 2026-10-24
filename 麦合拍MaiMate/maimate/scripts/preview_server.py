@@ -239,12 +239,18 @@ def handler_for(app, allowed_hosts):
                      "/settings": ("settings.html", "text/html; charset=utf-8"), "/settings.js": ("settings.js", "text/javascript; charset=utf-8"),
                      "/": ("dashboard.html", "text/html; charset=utf-8"), "/chat": ("index.html", "text/html; charset=utf-8"),
                      "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"), "/dashboard.css": ("dashboard.css", "text/css; charset=utf-8"),
+                     "/navigation.css": ("navigation.css", "text/css; charset=utf-8"),
                      "/app.js": ("app.js", "text/javascript; charset=utf-8"),
                      "/style.css": ("style.css", "text/css; charset=utf-8"), "/agent.css": ("agent.css", "text/css; charset=utf-8")}
             if path not in files:
                 return self.send(404, {"error": "未找到页面"})
             name, kind = files[path]
-            return self.send(200, (WEB / name).read_bytes(), kind)
+            content = (WEB / name).read_bytes()
+            if kind.startswith('text/html'):
+                navigation = (WEB / 'navigation.html').read_text(encoding='utf-8')
+                navigation = navigation.replace(f'data-section="{path}"', f'data-section="{path}" aria-current="page"')
+                content = content.replace(b'<!-- workspace-navigation -->', navigation.encode('utf-8'))
+            return self.send(200, content, kind)
 
         def do_POST(self):
             origin = self.headers.get("Origin")
