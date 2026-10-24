@@ -95,6 +95,15 @@ def test_model_recommendation_cannot_rewrite_unknown_specific_request(agent):
     assert '没有匹配' in result['reply']
 
 
+def test_explicit_ordinal_uses_current_list_even_if_model_code_conflicts(agent):
+    s = setup_menu(agent)
+    s.candidates = [{'code': 'meal-1', 'name': '牛肉汉堡套餐'},
+                    {'code': 'value-1', 'name': '人气经典随心配'}]
+    result = agent._intent(s, {'action': 'select_meal', 'meal_index': 2, 'product_codes': ['meal-1']}, '第二个')
+    assert result['cart']['name'] == '人气经典随心配'
+    assert not agent.app.adapter.writes
+
+
 def test_current_named_meal_remains_in_model_context_after_truncation(agent):
     s = setup_menu(agent)
     s.catalog['meals'] = {**{f'f{i}': {'name': f'普通汉堡{i}套餐'} for i in range(250)}, **MENU}

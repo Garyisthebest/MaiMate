@@ -714,10 +714,10 @@ class OrderingAgent:
             return self._store_index(s, intent.get('store_index'))
         if action == 'select_meal':
             reference = re.search(r'第|套餐\s*\d|方案\s*\d|[一二三123]号|就这个|就这个吧', text)
-            if intent.get('product_codes') and reference:
-                return self._meal(s, intent['product_codes'][0])
             if intent.get('meal_index') and reference:
                 return self._meal_index(s, intent['meal_index'])
+            if intent.get('product_codes') and reference:
+                return self._meal(s, intent['product_codes'][0])
             return self.view(s, '请选择刚才列出的套餐，或直接说餐品名称。')
         if action == 'modify':
             if intent.get('changes'):
