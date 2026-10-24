@@ -1,0 +1,19 @@
+{
+  "store.search": "query-nearby-stores",
+  "store.delivery": "delivery-query-stores",
+  "menu.get": "query-meals",
+  "menu.detail": "query-meal-detail",
+  "availability.check": null,
+  "promotion.match": null,
+  "promotion.list": "query-store-coupons",
+  "price.calculate": "calculate-price",
+  "cart.create": null,
+  "cart.reprice": null,
+  "order.preview": null,
+  "order.submit": "create-order",
+  "order.status": "query-order",
+  "order.cancel": "cancel-order",
+  "order.cancel_or_refund": null,
+  "nutrition.list": "list-nutrition-foods",
+  "campaign.calendar": "campaign-calendar"
+}

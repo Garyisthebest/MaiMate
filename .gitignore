@@ -1,0 +1,40 @@
+# Local instructions and assistant state are not part of the public project.
+/AGENTS.md
+.workbuddy/
+.codex/
+.idea/
+.vscode/
+.DS_Store
+
+# Credentials: publish only deliberately prepared examples.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+credentials*.json
+secrets*.json
+
+# Environments, downloaded dependencies, runtime accounts and personal data.
+.conda/
+.venv/
+venv/
+runtime/
+node_modules/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.log
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/

@@ -1,0 +1,13 @@
+'use strict';
+const $=id=>document.getElementById(id);
+let provider='qwen',current=null,busy=false;
+function choose(p,reset=false){provider=p;document.querySelectorAll('[data-provider]').forEach(b=>b.classList.toggle('active',b.dataset.provider===p));if(reset){$('apiKey').value='';$('modelName').value=p==='qwen'?'qwen-plus':'deepseek-chat';}$('apiKey').placeholder=current?.configured&&current.provider===p?'已保存；留空保留原密钥':'填写你的 API key';}
+async function post(path,body={}){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw Error(data.error||'操作未完成');return data;}
+function lock(v){busy=v;document.querySelectorAll('button').forEach(b=>b.disabled=v);}
+async function save(test=false){if(busy)return;lock(true);$('modelNotice').textContent=test?'正在保存并测试…':'正在保存…';try{current=await post('/api/settings/model',{provider,model:$('modelName').value.trim(),key:$('apiKey').value.trim()});$('apiKey').value='';choose(provider);if(test){await post('/api/settings/model/test');$('modelNotice').textContent=current.name+' 已连接，可以在微信或网页自然语言点餐。';}else{$('modelNotice').textContent=current.configured?'已保存，立即生效。可点击“保存并测试”验证接口。':'连接已保存，尚未填写 API key。';}}catch(e){$('modelNotice').textContent=e.message;}finally{lock(false);}}
+$('modelForm').onsubmit=e=>{e.preventDefault();save();};$('testModel').onclick=()=>save(true);document.querySelectorAll('[data-provider]').forEach(b=>b.onclick=()=>choose(b.dataset.provider,true));
+$('removeKey').onclick=async()=>{if(busy)return;lock(true);try{current=await post('/api/settings/model',{provider,model:$('modelName').value.trim(),remove_key:true});$('apiKey').value='';choose(provider);$('modelNotice').textContent='已移除模型密钥，当前使用指令模式。';}catch(e){$('modelNotice').textContent=e.message;}finally{lock(false);}};
+function locationStatus(data){$('locationNotice').textContent=data.enabled?'定位通道已启用。在微信发送“定位”即可获取单次链接。':'定位通道未开启。';$('startLocation').textContent=data.enabled?'定位通道已启用':'启用微信定位';}
+async function locationAction(action){if(busy)return;lock(true);$('locationNotice').textContent=action==='start'?'正在建立 HTTPS 定位通道，通常需要几秒…':'正在关闭定位通道…';try{locationStatus(await post('/api/location/'+action));}catch(e){$('locationNotice').textContent=e.message;}finally{lock(false);}}
+$('startLocation').onclick=()=>locationAction('start');$('stopLocation').onclick=()=>locationAction('stop');
+fetch('/api/settings').then(r=>r.json()).then(data=>{current=data.model;choose(current.provider);$('modelName').value=current.model;$('modelNotice').textContent=current.configured?'模型密钥已配置；可以测试连接。':'填入你自己的千问或 DeepSeek API key 即可启用。';locationStatus(data.location);}).catch(()=>{$('modelNotice').textContent='本地服务未连接。';});

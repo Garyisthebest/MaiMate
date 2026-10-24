@@ -1,0 +1,6 @@
+interface:
+  display_name: "麦聚桌 · 你的点餐搭子"
+  short_description: "用麦当劳官方MCP查门店、推荐套餐、换搭配，确认金额后下单并前往官方付款"
+  default_prompt: "使用 $mcdonald-lunch-table 帮我在当前门店推荐套餐，选好搭配并展示官方应付金额，等我确认后再下单。"
+policy:
+  allow_implicit_invocation: true
